@@ -1,6 +1,7 @@
 #include "include/ISS.h"
 #include "event_serialize.h"
 #include "gesture_event.h"
+#include "switch_gesture.h"
 
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -133,6 +134,8 @@ static CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type,
 
     // Re-enable if the system disabled our tap for being too slow
     if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        swipeTracking = false;
+        swipeFired = false;
         if (globalTap) CGEventTapEnable(globalTap, true);
         return event;
     }
@@ -198,12 +201,18 @@ static CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type,
             }
             swipeTracking = false;
             swipeFired = false;
+            if (iss_requires_event_augmentation()) {
+                // The tap owns a replacement event's retained reference.
+                return iss_copy_neutral_swipe_ending(event);
+            }
             return NULL;
         }
 
         case kCGSGesturePhaseCancelled:
+            if (!swipeTracking) return event;
             swipeTracking = false;
             swipeFired = false;
+            if (iss_requires_event_augmentation()) return iss_copy_neutral_swipe_ending(event);
             return NULL;
 
         default:
@@ -425,37 +434,25 @@ bool iss_can_move(ISSSpaceInfo info, ISSDirection direction) {
     return !iss_should_block_switch(&info, direction);
 }
 
-static bool iss_post_dock_swipe(CGSGesturePhase phase, ISSDirection direction, double velocity) {
-    const bool isRight = (direction == ISSDirectionRight);
-    
-    // On macOS 27 the Dock server's interpretation of positive/negative
-    // progress and velocity is inverted relative to the app's internal
-    // direction model. Flip the sign for the augmented path only.
-    const double progress = iss_requires_event_augmentation()
-                                ? (isRight ? -1.0 / 65536.0 : 1.0 / 65536.0)
-                                : (isRight ? (double)FLT_TRUE_MIN : -(double)FLT_TRUE_MIN);
-
-    // Velocity of gesture based on speed setting
-    const double vel = isRight ? velocity : -velocity;
-    const double modernVel = isRight ? -velocity : velocity;
-
-    CGEventRef ev = iss_create_dock_swipe_event(phase, progress,
-        iss_requires_event_augmentation() ? modernVel : vel,
-        iss_requires_event_augmentation());
-    if (!ev) {
+static bool iss_perform_switch_gesture(ISSDirection direction, double velocity) {
+    const bool modern = iss_requires_event_augmentation();
+    Boolean valid = false;
+    Boolean natural = true;
+    if (modern) {
+        // Sample once for the complete request, including all three phases.
+        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication);
+        natural = CFPreferencesGetAppBooleanValue(CFSTR("com.apple.swipescrolldirection"),
+                                                  kCFPreferencesAnyApplication, &valid);
+    }
+    ISSPreparedGesture gesture;
+    if (!iss_prepare_switch_gesture(direction, velocity, modern, !valid || natural, &gesture)) {
         return false;
     }
-    CGEventPost(kCGSessionEventTap, ev);
-    CFRelease(ev);
+    for (size_t i = 0; i < gesture.count; i++) {
+        CGEventPost(kCGSessionEventTap, gesture.events[i]);
+    }
+    iss_release_prepared_gesture(&gesture);
     return true;
-}
-
-static bool iss_perform_switch_gesture(ISSDirection direction, double velocity) {
-    // Send three gesture events--began, changed, and ended
-    // If we only send two then mission control doesn't work.
-    return iss_post_dock_swipe(kCGSGesturePhaseBegan,   direction, velocity)
-        && iss_post_dock_swipe(kCGSGesturePhaseChanged, direction, velocity)
-        && iss_post_dock_swipe(kCGSGesturePhaseEnded,   direction, velocity);
 }
 
 /** @brief Walks a CGWindowListCopyWindowInfo result

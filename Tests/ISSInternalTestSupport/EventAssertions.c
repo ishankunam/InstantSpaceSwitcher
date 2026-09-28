@@ -179,3 +179,75 @@ int iss_test_synthetic_identity(void) {
     CFRelease(hardware);
     return failures;
 }
+
+int iss_test_prepared_gestures(void) {
+    int failures = 0;
+    for (int modern = 0; modern <= 1; modern++) {
+        for (int natural = 0; natural <= 1; natural++) {
+            for (int right = 0; right <= 1; right++) {
+                ISSPreparedGesture gesture;
+                CHECK(iss_prepare_switch_gesture(right ? ISSDirectionRight : ISSDirectionLeft,
+                                                80, modern, natural, &gesture));
+                CHECK(gesture.count == (modern ? 6 : 3));
+                double sign = (right ? 1.0 : -1.0) * (modern && natural ? -1.0 : 1.0);
+                for (size_t i = 0; i < gesture.count; i++) {
+                    CGEventRef event = gesture.events[i];
+                    CHECK(iss_is_synthetic_event(event));
+                    bool companion = modern && i % 2 == 1;
+                    CHECK(CGEventGetIntegerValueField(event, (CGEventField)55) == (companion ? 29 : 30));
+                    if (companion) continue;
+                    size_t phaseIndex = modern ? i / 2 : i;
+                    const int phases[] = {1, 2, 4};
+                    CHECK(CGEventGetIntegerValueField(event, (CGEventField)132) == phases[phaseIndex]);
+                    CHECK(CGEventGetDoubleValueField(event, (CGEventField)124) ==
+                          sign * (modern ? 1.0 / 65536.0 : (double)FLT_TRUE_MIN));
+                    CHECK(CGEventGetDoubleValueField(event, (CGEventField)129) ==
+                          (modern ? (phaseIndex == 2 ? sign * 9999 : 0) : sign * 80));
+                }
+                iss_release_prepared_gesture(&gesture);
+                CHECK(gesture.count == 0);
+                iss_release_prepared_gesture(&gesture);
+            }
+        }
+    }
+    ISSPreparedGesture invalid;
+    CHECK(!iss_prepare_switch_gesture((ISSDirection)99, 2000, true, true, &invalid));
+    CHECK(invalid.count == 0);
+    CHECK(!iss_prepare_switch_gesture(ISSDirectionLeft, NAN, true, true, &invalid));
+    CHECK(invalid.count == 0);
+    return failures;
+}
+
+int iss_test_neutral_ending(void) {
+    int failures = 0;
+    for (int phase = 4; phase <= 8; phase += 4) {
+        CGEventRef event = iss_create_dock_swipe_event(4, -1.0 / 65536, -9999, true);
+        CHECK(event != NULL);
+        if (!event) continue;
+        CGEventSetIntegerValueField(event, (CGEventField)132, phase);
+        CGEventRef neutral = iss_copy_neutral_swipe_ending(event);
+        CHECK(neutral != NULL);
+        if (neutral) {
+            CHECK(iss_is_synthetic_event(neutral));
+            CHECK(CGEventGetIntegerValueField(neutral, (CGEventField)132) == phase);
+            CHECK(CGEventGetDoubleValueField(neutral, (CGEventField)124) == 0);
+            CHECK(CGEventGetDoubleValueField(neutral, (CGEventField)129) == 0);
+            CHECK(CGEventGetDoubleValueField(event, (CGEventField)129) == -9999);
+            CFDataRef data = CGEventCreateData(NULL, neutral);
+            size_t size = 0;
+            int count = 0;
+            const uint8_t *payload = find_payload(data, &size, &count);
+            CHECK(payload && count == 1 && size >= 68);
+            if (payload && size >= 68) {
+                CHECK(little32(payload + 36) == (uint32_t)phase << 24);
+                CHECK(little32(payload + 64) == 0);
+                if (size == 96) CHECK(little32(payload + 84) == 0);
+            }
+            if (data) CFRelease(data);
+            CFRelease(neutral);
+        }
+        CFRelease(event);
+    }
+    CHECK(iss_copy_neutral_swipe_ending(NULL) == NULL);
+    return failures;
+}

@@ -6,4 +6,6 @@ final class EventSerializationTests: XCTestCase {
     func testPayloadLayoutAndReplacement() { XCTAssertEqual(iss_test_serialized_payload(), 0) }
     func testMalformedInput() { XCTAssertEqual(iss_test_serialized_validation(), 0) }
     func testSyntheticIdentity() { XCTAssertEqual(iss_test_synthetic_identity(), 0) }
+    func testDirectionAndCompanionEvents() { XCTAssertEqual(iss_test_prepared_gestures(), 0) }
+    func testConsumedHardwareEnding() { XCTAssertEqual(iss_test_neutral_ending(), 0) }
 }

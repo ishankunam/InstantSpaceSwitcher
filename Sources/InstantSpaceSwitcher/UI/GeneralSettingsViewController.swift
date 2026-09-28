@@ -135,6 +135,12 @@ final class GeneralSettingsViewController: NSViewController {
       animationSpeedPopup.selectItem(at: 4)
     }
 
+    if #available(macOS 27, *) {
+      animationSpeedPopup.selectItem(at: 4)
+      animationSpeedPopup.isEnabled = false
+      animationSpeedPopup.toolTip = "Instant switching is the supported speed on macOS 27."
+    }
+
     launchAtLoginCheckbox.state = SMAppService.mainApp.status == .enabled ? .on : .off
   }
 
