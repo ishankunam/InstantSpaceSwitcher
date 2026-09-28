@@ -2,6 +2,7 @@
 #include "event_serialize.h"
 #include "gesture_event.h"
 #include "switch_gesture.h"
+#include "prediction_cache.h"
 
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -12,6 +13,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static const CGEventField kCGSEventTypeField = (CGEventField)55;
@@ -72,31 +74,18 @@ static double gestureSpeed = 2000.0;
 
 static ISSSwitchCallback switchCallback = NULL;
 
-// Predictions dictionary: DisplayID (CFStringRef) -> Index (CFNumberRef)
-static CFMutableDictionaryRef predictionsDict = NULL;
+static ISSPredictionCache predictions;
+
+static double prediction_time(void) {
+    return (double)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1e9;
+}
 
 static bool get_prediction(const char *displayID, unsigned int *outIndex) {
-    if (!displayID || !predictionsDict) return false;
-    
-    CFStringRef key = CFStringCreateWithCString(NULL, displayID, kCFStringEncodingUTF8);
-    const void *value = CFDictionaryGetValue(predictionsDict, key);
-    CFRelease(key);
-
-    if (value) {
-        CFNumberGetValue((CFNumberRef)value, kCFNumberIntType, outIndex);
-        return true;
-    }
-    return false;
+    return iss_prediction_get(&predictions, displayID, prediction_time(), outIndex);
 }
 
 static void set_prediction(const char *displayID, unsigned int index) {
-    if (!displayID || !predictionsDict) return;
-    
-    CFStringRef key = CFStringCreateWithCString(NULL, displayID, kCFStringEncodingUTF8);
-    CFNumberRef val = CFNumberCreate(NULL, kCFNumberIntType, &index);
-    CFDictionarySetValue(predictionsDict, key, val);
-    CFRelease(key);
-    CFRelease(val);
+    iss_prediction_set(&predictions, displayID, index, prediction_time());
 }
 
 static bool extract_space_info_from_display(CFDictionaryRef displayDict,
@@ -358,10 +347,9 @@ static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDispla
         }
     }
 
-    CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, activeDisplayIdentifier);
-    if (!displays && activeDisplayIdentifier) {
-        displays = CGSCopyManagedDisplaySpaces(connection, NULL);
-    }
+    // Always inspect every display so moving the cursor cannot look like a
+    // disconnect. Select the cursor/menu-bar display from this snapshot below.
+    CFArrayRef displays = CGSCopyManagedDisplaySpaces(connection, NULL);
     if (!displays) {
         if (activeDisplayIdentifier) {
             CFRelease(activeDisplayIdentifier);
@@ -369,6 +357,7 @@ static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDispla
         return false;
     }
 
+    iss_prediction_observe_displays(&predictions, displays);
     const CFIndex displayCount = CFArrayGetCount(displays);
     CFDictionaryRef targetDisplay = NULL;
     CFDictionaryRef fallbackDisplay = NULL;
@@ -538,10 +527,6 @@ bool iss_init(void) {
         return true;
     }
 
-    if (!predictionsDict) {
-        predictionsDict = CFDictionaryCreateMutable(NULL, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    }
-
     CGEventMask mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp)
         | (1ULL << kCGSEventGesture) | (1ULL << kCGSEventDockControl);
     globalTap = CGEventTapCreate(
@@ -570,10 +555,7 @@ bool iss_init(void) {
 }
 
 void iss_destroy(void) {
-    if (predictionsDict) {
-        CFRelease(predictionsDict);
-        predictionsDict = NULL;
-    }
+    iss_prediction_destroy(&predictions);
     if (globalTap) {
         CGEventTapEnable(globalTap, false);
         if (globalSource) {
@@ -663,6 +645,9 @@ bool iss_switch_to_index(unsigned int targetIndex) {
         if (!iss_perform_switch_gesture(direction, velocity)) {
             return false;
         }
+        // Keep completed hops if construction of a later hop fails.
+        currentIndex = direction == ISSDirectionRight ? currentIndex + 1 : currentIndex - 1;
+        set_prediction(info.displayID, currentIndex);
     }
 
     set_prediction(info.displayID, targetIndex);
@@ -683,9 +668,7 @@ void iss_set_gesture_speed(double speed) {
 }
 
 void iss_reset_predictions(void) {
-    if (predictionsDict) {
-        CFDictionaryRemoveAllValues(predictionsDict);
-    }
+    iss_prediction_reset_settled(&predictions, prediction_time());
 }
 
 void iss_set_switch_callback(ISSSwitchCallback callback) {

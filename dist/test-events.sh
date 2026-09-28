@@ -6,7 +6,8 @@ clang -std=c11 -Wall -Wextra -Werror \
   -fsanitize=undefined,float-cast-overflow -fno-sanitize-recover=all \
   -I Tests/ISSInternalTestSupport/include \
   Sources/ISS/event_serialize.c Sources/ISS/gesture_event.c Sources/ISS/switch_gesture.c \
-  Tests/ISSInternalTestSupport/EventAssertions.c Tests/Standalone/main.c \
+  Sources/ISS/prediction_cache.c Tests/ISSInternalTestSupport/EventAssertions.c \
+  Tests/ISSInternalTestSupport/PredictionAssertions.c Tests/Standalone/main.c \
   -framework ApplicationServices -framework CoreFoundation \
   -o build/event-tests/events
 build/event-tests/events
