@@ -58,6 +58,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Service the tap installed by iss_init while posted events traverse it.
+    // The macOS 27 CLI must not tear the tap down immediately after posting.
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.3, false);
     iss_destroy();
     return 0;
 }
