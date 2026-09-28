@@ -1,4 +1,6 @@
 #include "include/ISS.h"
+#include "event_serialize.h"
+#include "gesture_event.h"
 
 #include <ApplicationServices/ApplicationServices.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -136,6 +138,7 @@ static CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type,
     }
 
     if (!swipeOverrideEnabled) return event;
+    if (iss_is_synthetic_event(event)) return event;
 
     CGSEventType eventType =
         (CGSEventType)CGEventGetIntegerValueField(event, kCGSEventTypeField);
@@ -424,23 +427,24 @@ bool iss_can_move(ISSSpaceInfo info, ISSDirection direction) {
 
 static bool iss_post_dock_swipe(CGSGesturePhase phase, ISSDirection direction, double velocity) {
     const bool isRight = (direction == ISSDirectionRight);
-    // Empirically, ±FLT_TRUE_MIN used in this way makes switching instant.
-    const double progress = isRight ? (double)FLT_TRUE_MIN : -(double)FLT_TRUE_MIN;
+    
+    // On macOS 27 the Dock server's interpretation of positive/negative
+    // progress and velocity is inverted relative to the app's internal
+    // direction model. Flip the sign for the augmented path only.
+    const double progress = iss_requires_event_augmentation()
+                                ? (isRight ? -1.0 / 65536.0 : 1.0 / 65536.0)
+                                : (isRight ? (double)FLT_TRUE_MIN : -(double)FLT_TRUE_MIN);
 
     // Velocity of gesture based on speed setting
     const double vel = isRight ? velocity : -velocity;
+    const double modernVel = isRight ? -velocity : velocity;
 
-    CGEventRef ev = CGEventCreate(NULL);
+    CGEventRef ev = iss_create_dock_swipe_event(phase, progress,
+        iss_requires_event_augmentation() ? modernVel : vel,
+        iss_requires_event_augmentation());
     if (!ev) {
         return false;
     }
-    CGEventSetIntegerValueField(ev, kCGSEventTypeField, kCGSEventDockControl);
-    CGEventSetIntegerValueField(ev, kCGEventGestureHIDType, kIOHIDEventTypeDockSwipe);
-    CGEventSetIntegerValueField(ev, kCGEventGesturePhase, phase);
-    CGEventSetDoubleValueField(ev, kCGEventGestureSwipeProgress, progress);
-    CGEventSetIntegerValueField(ev, kCGEventGestureSwipeMotion, kCGGestureMotionHorizontal);
-    CGEventSetDoubleValueField(ev, kCGEventGestureSwipeVelocityX, vel);
-    CGEventSetDoubleValueField(ev, kCGEventGestureSwipeVelocityY, vel);
     CGEventPost(kCGSessionEventTap, ev);
     CFRelease(ev);
     return true;
