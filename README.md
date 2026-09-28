@@ -1,5 +1,11 @@
 # InstantSpaceSwitcher
 
+> This fork's `fix/macos27-local-integration` branch provides a custom macOS 27
+> build. See [installation and rollback](INSTALL-MACOS27.md) and the
+> [validation record](VALIDATION-MACOS27.md). The focused upstream contribution
+> is [PR #104](https://github.com/jurplel/InstantSpaceSwitcher/pull/104).
+> The upstream downloads below do not contain this integration.
+
 Native instant workspace switching on macOS. No more waiting for animations.
 
 https://github.com/user-attachments/assets/037422c9-3fb7-41cd-8da7-58d28c4c8eff
@@ -62,4 +68,3 @@ If you work at Apple, and your team owns the space switching animation, please f
 
 [^1]: This happens because the app is not signed, which requires a costly Apple Developer account
 [^2]: And I know for a fact there is a rdar for this
-
